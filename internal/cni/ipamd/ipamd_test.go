@@ -328,7 +328,8 @@ func (n *node) ready() bool {
 
 func eventually(t *testing.T, what string, f func() bool) {
 	t.Helper()
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+	// Generous: it returns as soon as f holds, and -race on a two-core runner is slow.
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
 		if f() {
 			return
 		}
@@ -530,11 +531,12 @@ func TestOneKeyPerCallNeverOnDisk(t *testing.T) {
 	n := start(t, c)
 	eventually(t, "ready", n.ready)
 	n.add(t, "c1")
-	c.mu.Lock()
-	if c.creds != c.calls || c.calls < 4 {
-		t.Fatalf("%d keys for %d calls", c.creds, c.calls)
-	}
-	c.mu.Unlock()
+	// A background call may have fetched its key but not yet reached the cloud: wait for it.
+	eventually(t, "one key per call", func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.creds == c.calls && c.calls >= 4
+	})
 	filepath.Walk(n.dir, func(p string, _ os.FileInfo, _ error) error {
 		if b, _ := os.ReadFile(p); bytes.Contains(b, []byte("ezgh_")) {
 			t.Errorf("%s holds a key", p)
