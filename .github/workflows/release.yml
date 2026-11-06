@@ -2,9 +2,10 @@ name: Release
 
 # A tag vX.Y.Z publishes the GitHub release: ezgh-vpc-cni-linux-{amd64,arm64} and
 # SHA256SUMS. It also pushes the image to the kubernetes-addons Registry as
-# <KUBERNETES_ADDONS_REGISTRY_HOST>/kubernetes/vpc-cni:<tag>, which needs repository secret
-# KUBERNETES_ADDONS_REGISTRY_KEY and variable KUBERNETES_ADDONS_REGISTRY_HOST. A published image tag
-# never moves: a change ships as a new version.
+# <KUBERNETES_ADDONS_REGISTRY_HOST>/kubernetes/vpc-cni:<tag> first, from GitHub Environment `release`
+# (secret KUBERNETES_ADDONS_REGISTRY_KEY, variable KUBERNETES_ADDONS_REGISTRY_HOST; limit it to tags
+# v*), so the binaries publish only with the image. A published image tag never moves: a change
+# ships as a new version.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
@@ -22,6 +23,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+    needs: image
     env:
       VERSION: ${{ github.ref_name }}
     steps:
@@ -49,6 +51,7 @@ jobs:
     name: Image
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    environment: release
     permissions:
       contents: read
     env:
@@ -60,7 +63,7 @@ jobs:
           KEY: ${{ secrets.KUBERNETES_ADDONS_REGISTRY_KEY }}
         run: |
           [ -n "$KEY" ] && [[ $HOST =~ ^[a-z0-9]+\.registry\.ezghcloud\.com$ ]] ||
-            { echo "::error::set secret KUBERNETES_ADDONS_REGISTRY_KEY and variable KUBERNETES_ADDONS_REGISTRY_HOST"; exit 1; }
+            { echo "::error::set secret KUBERNETES_ADDONS_REGISTRY_KEY and variable KUBERNETES_ADDONS_REGISTRY_HOST in Environment release"; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

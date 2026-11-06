@@ -27,7 +27,7 @@ Go 1.27.1 (`go.mod`).
 | Image | `docker build .` (Debian with nftables, plus upstream portmap at the containernetworking/plugins version `go.mod` pins) |
 | Tests | `go test -race $(go list ./... \| grep -v /internal/kit/)` |
 | Kernel tests | `scripts/netns-test.sh` (build tag `netns`: veths, routes, rules, dummy links and nftables in throwaway network namespaces, as root in a Debian container: Apple `container` on a Mac, Docker elsewhere) |
-| Lint | `gofmt -l .`, `go vet ./...`, `go vet -tags netns ./internal/cni/...`, `go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...` |
+| Lint | `gofmt -l .`; `go vet` (also `-tags netns ./internal/cni/...`) and `go run honnef.co/go/tools/cmd/staticcheck@v0.8.1` over `$(go list ./... \| grep -v /internal/kit/)` (service-template checks the kit) |
 | Logging | `scripts/check-logging.sh` |
 
 CI (`.github/workflows/ci.yml`) runs them, the kernel tests as root on a GitHub-hosted runner with
@@ -38,10 +38,11 @@ it, on every pull request and push to main.
 
 Push a tag `vX.Y.Z` on main. `.github/workflows/release.yml` publishes the GitHub release
 (`ezgh-vpc-cni-linux-{amd64,arm64}`, `SHA256SUMS`) and pushes the linux/amd64 image to the
-kubernetes-addons Registry as `<host>/kubernetes/vpc-cni:<tag>`. That needs repository secret
-`KUBERNETES_ADDONS_REGISTRY_KEY` (a platform-organization Bot key that can push to project
+kubernetes-addons Registry as `<host>/kubernetes/vpc-cni:<tag>`. The image goes first and the binaries only after it, from GitHub Environment `release`
+(limited to tags `v*`): secret `KUBERNETES_ADDONS_REGISTRY_KEY` (a platform-organization Bot key that can push to project
 kubernetes-addons) and variable `KUBERNETES_ADDONS_REGISTRY_HOST` (`<hostId>.registry.ezghcloud.com`).
-A published tag never moves: a fix ships as a new version.
+A published tag never moves: a fix ships as a new version. The add-on bundle runs the image's
+commands and flags as they are: changing one needs a new bundle version in kubernetes-stack too.
 
 kubernetes-stack's `vpc-cni` add-on bundle pins the image in its `images.json` (`vpc-cni`).
 
