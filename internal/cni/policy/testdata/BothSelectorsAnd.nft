@@ -1,0 +1,17 @@
+table inet ezgh_policy {
+	set p0_in0_ip {
+		type ipv4_addr
+		elements = { 10.240.2.20 }
+	}
+	chain forward {
+		type filter hook forward priority 0; policy accept;
+		ct state established,related accept
+		ct state invalid drop
+		oifname vmap { "ezpcdef01234567" : jump in_ezpcdef01234567 }
+	}
+	chain in_ezpcdef01234567 {
+		ip saddr @p0_in0_ip return
+		meta l4proto tcp reject with tcp reset
+		reject with icmpx type admin-prohibited
+	}
+}

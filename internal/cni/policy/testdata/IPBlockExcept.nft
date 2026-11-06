@@ -1,0 +1,14 @@
+table inet ezgh_policy {
+	chain forward {
+		type filter hook forward priority 0; policy accept;
+		ct state established,related accept
+		ct state invalid drop
+		oifname vmap { "ezpcdef01234567" : jump in_ezpcdef01234567 }
+	}
+	chain in_ezpcdef01234567 {
+		ip saddr 10.0.0.0/8 ip saddr != { 10.240.2.0/24, 10.9.0.0/16 } return
+		ip6 saddr 2001:db8::/32 return
+		meta l4proto tcp reject with tcp reset
+		reject with icmpx type admin-prohibited
+	}
+}

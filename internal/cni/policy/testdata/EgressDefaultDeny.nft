@@ -1,0 +1,12 @@
+table inet ezgh_policy {
+	chain forward {
+		type filter hook forward priority 0; policy accept;
+		ct state established,related accept
+		ct state invalid drop
+		iifname vmap { "ezp0123456789ab" : jump out_ezp0123456789ab }
+	}
+	chain out_ezp0123456789ab {
+		meta l4proto tcp reject with tcp reset
+		reject with icmpx type admin-prohibited
+	}
+}

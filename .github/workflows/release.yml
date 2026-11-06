@@ -1,0 +1,90 @@
+name: Release
+
+# A tag vX.Y.Z publishes the GitHub release: ezgh-vpc-cni-linux-{amd64,arm64} and
+# SHA256SUMS. It also pushes the image to the kubernetes-addons Registry as
+# <KUBERNETES_ADDONS_REGISTRY_HOST>/kubernetes/vpc-cni:<tag>, which needs repository secret
+# KUBERNETES_ADDONS_REGISTRY_KEY and variable KUBERNETES_ADDONS_REGISTRY_HOST. A published image tag
+# never moves: a change ships as a new version.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  binaries:
+    name: Binaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: build
+        run: |
+          mkdir dist
+          for cmd in ezgh-vpc-cni; do
+            for arch in amd64 arm64; do
+              GOOS=linux GOARCH=$arch CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w" -o "dist/$cmd-linux-$arch" "./cmd/$cmd"
+            done
+          done
+          (cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
+      - name: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$VERSION" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "$VERSION" --notes "Linux binaries for amd64 and arm64; verify them with SHA256SUMS."
+
+  image:
+    name: Image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      HOST: ${{ vars.KUBERNETES_ADDONS_REGISTRY_HOST }}
+      IMAGE: ${{ vars.KUBERNETES_ADDONS_REGISTRY_HOST }}/kubernetes/vpc-cni:${{ github.ref_name }}
+    steps:
+      - name: registry configured
+        env:
+          KEY: ${{ secrets.KUBERNETES_ADDONS_REGISTRY_KEY }}
+        run: |
+          [ -n "$KEY" ] && [[ $HOST =~ ^[a-z0-9]+\.registry\.ezghcloud\.com$ ]] ||
+            { echo "::error::set secret KUBERNETES_ADDONS_REGISTRY_KEY and variable KUBERNETES_ADDONS_REGISTRY_HOST"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ${{ vars.KUBERNETES_ADDONS_REGISTRY_HOST }}
+          username: ezgh
+          password: ${{ secrets.KUBERNETES_ADDONS_REGISTRY_KEY }}
+      - name: a published tag never moves
+        run: |
+          if docker buildx imagetools inspect "$IMAGE" >/dev/null 2>"$RUNNER_TEMP/err"; then
+            echo "::error::$IMAGE is already published"; exit 1
+          fi
+          grep -qiE 'not found|MANIFEST_UNKNOWN|NAME_UNKNOWN' "$RUNNER_TEMP/err" || { cat "$RUNNER_TEMP/err"; exit 1; }
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: ${{ env.IMAGE }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.licenses=Apache-2.0

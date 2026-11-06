@@ -1,0 +1,22 @@
+table inet ezgh_policy {
+	set p0_out0_named_ip {
+		type ipv4_addr . inet_proto . inet_service
+		elements = { 10.240.1.16 . tcp . 8080, 10.240.1.17 . tcp . 5432, 10.240.2.20 . tcp . 9000 }
+	}
+	set p0_out0_named_ip6 {
+		type ipv6_addr . inet_proto . inet_service
+		elements = { fdcc:1:2:1:c4a4::16 . tcp . 8080, fdcc:1:2:1:c4a4::17 . tcp . 5432 }
+	}
+	chain forward {
+		type filter hook forward priority 0; policy accept;
+		ct state established,related accept
+		ct state invalid drop
+		iifname vmap { "ezp0123456789ab" : jump out_ezp0123456789ab }
+	}
+	chain out_ezp0123456789ab {
+		ip daddr . meta l4proto . th dport @p0_out0_named_ip return
+		ip6 daddr . meta l4proto . th dport @p0_out0_named_ip6 return
+		meta l4proto tcp reject with tcp reset
+		reject with icmpx type admin-prohibited
+	}
+}

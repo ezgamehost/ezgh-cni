@@ -1,0 +1,1 @@
+{"cniVersion":"1.0.0","name":"ezgh-vpc-cni","plugins":[{"type":"ezgh-vpc-cni","socket":"/run/ezgh-vpc-cni/ipamd.sock"},{"type":"portmap","backend":"nftables","capabilities":{"portMappings":true}}]}
