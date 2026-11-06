@@ -1,6 +1,5 @@
-// Package netapi is ipamd's client of network-api's delegated-prefix routes (network-stack
-// 2026-11-02-delegated-prefixes-design.md), called as the node's Bot with a key fetched from
-// metadata for each request and never kept.
+// Package netapi is ipamd's client of network-api's delegated-prefix routes, called as the node's
+// Bot with a key fetched from metadata for each request and never kept.
 package netapi
 
 import (
