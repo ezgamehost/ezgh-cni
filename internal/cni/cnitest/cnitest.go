@@ -126,16 +126,18 @@ const (
 func NewNode(t *testing.T, pubMTU int) *Node {
 	t.Helper()
 	n := &Node{NS: NS(t), VPC: NS(t), Inet: NS(t)}
-	// No DAD on these links, so their link-locals are usable at once, as a real node's are long before
-	// its first pod: while the private link's is tentative the kernel sends no neighbour solicitation
-	// for forwarded traffic, and a pod's IPv6 into the VPC fails "no route to host". Pods keep DAD.
-	for _, x := range []ns.NetNS{n.NS, n.VPC, n.Inet} {
+	// No DAD on the node's own links and the peers', so their link-locals are usable at once, as a real
+	// node's are long before its first pod: while the private link's is tentative the kernel sends no
+	// neighbour solicitation for forwarded traffic, and a pod's IPv6 into the VPC fails "no route to
+	// host". The node's default stays on, so host veths the plugin makes keep DAD, as pods do.
+	for _, x := range []ns.NetNS{n.VPC, n.Inet} {
 		Sh(t, x, "sysctl -qw net.ipv6.conf.all.accept_dad=0 net.ipv6.conf.default.accept_dad=0")
 	}
 	Sh(t, n.NS, `
 sysctl -qw net.ipv4.ip_forward=1 net.ipv6.conf.all.forwarding=1 net.ipv4.conf.all.arp_announce=2 net.ipv4.conf.default.arp_announce=2
 ip link add `+Private+` mtu 8900 type veth peer name eth0 mtu 8900 netns `+Name(n.VPC)+`
 ip link add pub mtu `+strconv.Itoa(pubMTU)+` type veth peer name eth0 mtu 9000 netns `+Name(n.Inet)+`
+sysctl -qw net.ipv6.conf.all.accept_dad=0 net.ipv6.conf.`+Private+`.accept_dad=0 net.ipv6.conf.pub.accept_dad=0
 ip addr add 10.240.1.5/24 dev `+Private+`
 ip -6 addr add fdcc:1:2:1::5/64 dev `+Private+` nodad
 ip addr add `+NodePub4+`/24 dev pub
@@ -167,6 +169,11 @@ for a in fd65:7a67:6800::254 `+Inet6+`; do ip -6 addr add $a/128 dev lo; done`)
 		link string
 	}{{n.NS, Private}, {n.NS, "pub"}, {n.VPC, "eth0"}, {n.Inet, "eth0"}} {
 		WaitUp(t, l.ns, l.link)
+	}
+	// Even without DAD a new link-local is tentative until the kernel's DAD work runs, which waits on
+	// rtnl behind other tests' namespace teardowns: wait for it, as WaitUp waits for carrier.
+	for _, x := range []ns.NetNS{n.NS, n.VPC, n.Inet} {
+		Sh(t, x, `for i in $(seq 200); do [ -z "$(ip -6 addr show tentative)" ] && exit 0; sleep 0.05; done; exit 1`)
 	}
 	return n
 }

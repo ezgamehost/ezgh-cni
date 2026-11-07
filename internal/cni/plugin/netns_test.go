@@ -149,6 +149,18 @@ func TestAddWiresPod(t *testing.T) {
 		if p := (<-peers).(*net.TCPAddr).IP.String(); p != "10.240.1.16" && p != "fdcc:1:2:1:c4a4::10" {
 			t.Fatal(p)
 		}
+	} // And into the pod from the VPC: the node solicits the pod from the host veth's nodad fe80::1 while
+	// the veth's own link-local may still be tentative.
+	for _, l := range []string{"10.240.1.16:80", "[fdcc:1:2:1:c4a4::10]:80"} {
+		peers := cnitest.Listen(t, pod, l)
+		c, err := cnitest.Dial(s.node.VPC, l, 5*time.Second)
+		if err != nil {
+			t.Fatal(l, err)
+		}
+		c.Close()
+		if p := (<-peers).(*net.TCPAddr).IP.String(); p != cnitest.VPCPeer4 && p != cnitest.VPCPeer6 && p != "10.240.1.1" && p != "fdcc:1:2:1::1" {
+			t.Fatal("pod saw", p)
+		}
 	}
 }
 
