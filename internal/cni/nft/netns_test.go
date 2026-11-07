@@ -144,7 +144,7 @@ func TestMasqueradeOnlyOffPrivate(t *testing.T) {
 		c, err := cnitest.Dial(pod, tc.listen, 5*time.Second)
 		if err != nil {
 			t.Fatalf("%s: %v\nnode:\n%s\nvpc:\n%s\npod:\n%s", tc.listen, err,
-				cnitest.Sh(t, n.NS, "ip -6 rule; ip -6 route show table all; ip -6 neigh; nft list ruleset"),
+				cnitest.Sh(t, n.NS, "ip -6 addr; ip -6 rule; ip -6 route show table all; ip -6 neigh; nft list ruleset"),
 				cnitest.Sh(t, n.VPC, "ip -6 addr; ip -6 route; ip -6 neigh"), cnitest.Sh(t, pod, "ip -6 addr; ip -6 route; ip -6 neigh"))
 		}
 		c.Close()
@@ -216,5 +216,18 @@ func TestMSSClamped(t *testing.T) {
 	defer c.Close()
 	if got := <-mss; got <= 0 || got > 1360 {
 		t.Fatalf("MSS %d through a 1400 MTU", got)
+	}
+}
+
+// TestNewNodeNoTentative: cnitest's node is past duplicate address detection, as a real node is long
+// before its first pod. While the private link's link-local is tentative the kernel sends no neighbour
+// solicitation for forwarded traffic (ndisc_send_ns needs a usable link-local source), so the pod's
+// IPv6 into the VPC in TestMasqueradeOnlyOffPrivate failed "no route to host" when the runner was slow.
+func TestNewNodeNoTentative(t *testing.T) {
+	n := cnitest.NewNode(t, 1500)
+	for name, x := range map[string]ns.NetNS{"node": n.NS, "vpc": n.VPC, "inet": n.Inet} {
+		if out := cnitest.Sh(t, x, "ip -6 addr show tentative"); out != "" {
+			t.Errorf("%s has tentative addresses:\n%s", name, out)
+		}
 	}
 }

@@ -126,6 +126,12 @@ const (
 func NewNode(t *testing.T, pubMTU int) *Node {
 	t.Helper()
 	n := &Node{NS: NS(t), VPC: NS(t), Inet: NS(t)}
+	// No DAD on these links, so their link-locals are usable at once, as a real node's are long before
+	// its first pod: while the private link's is tentative the kernel sends no neighbour solicitation
+	// for forwarded traffic, and a pod's IPv6 into the VPC fails "no route to host". Pods keep DAD.
+	for _, x := range []ns.NetNS{n.NS, n.VPC, n.Inet} {
+		Sh(t, x, "sysctl -qw net.ipv6.conf.all.accept_dad=0 net.ipv6.conf.default.accept_dad=0")
+	}
 	Sh(t, n.NS, `
 sysctl -qw net.ipv4.ip_forward=1 net.ipv6.conf.all.forwarding=1 net.ipv4.conf.all.arp_announce=2 net.ipv4.conf.default.arp_announce=2
 ip link add `+Private+` mtu 8900 type veth peer name eth0 mtu 8900 netns `+Name(n.VPC)+`
