@@ -1,60 +1,78 @@
 # ezgh-cni
 
-The VPC CNI for EZGH Kubernetes, the counterpart of amazon-vpc-cni-k8s: every pod gets a real
-IPv4 and IPv6 address from the node's VPC subnet, out of prefixes delegated to the node's private
-network interface, so pods are reachable from the VPC with no overlay and no NAT. It also enforces
-Kubernetes NetworkPolicy on each node with nftables.
+Pod networking for [EZGH Kubernetes](https://docs.ezghcloud.com). Every pod gets its own IPv4 and
+IPv6 address from the node's VPC subnet, so pods are directly reachable inside the VPC with no
+overlay network and no address translation. The plugin also enforces Kubernetes NetworkPolicy on
+every node.
 
-One binary, `ezgh-vpc-cni`, in the `vpc-cni` image, run by the vpc-cni add-on's DaemonSet:
+EZGH Kubernetes installs and upgrades this component as the `vpc-cni` add-on. This repository holds
+its source code; you don't need to deploy it yourself.
 
-| Mode | Job |
+## Features
+
+- **VPC-native addresses.** Pod addresses come from IPv4 /28 and IPv6 /80 prefixes delegated to the
+  node's private network interface, assigned and released as pods come and go.
+- **Internet egress.** IPv4 traffic leaving the VPC is translated to the node's address. IPv6 pod
+  traffic stays within the VPC.
+- **Metadata isolation.** Pods can't reach the instance metadata service.
+- **NetworkPolicy.** Ingress and egress policies are compiled into nftables on each node.
+- **hostPort.** Supported through the upstream `portmap` plugin.
+
+## Components
+
+One binary, `ezgh-vpc-cni`, runs in four modes:
+
+| Mode | Purpose |
 | --- | --- |
-| CNI plugin (containerd runs it with `CNI_COMMAND` set and no arguments) | Pod veths with fixed MACs, routes and rules; addresses from ipamd |
-| `install` | Init container: copies `ezgh-vpc-cni` and upstream `portmap` (hostPort) to the node's CNI directory |
-| `ipamd` | Address management: assigns and releases delegated prefixes through the EZGH network API with the node's instance credentials (from the metadata service), writes the conflist, keeps table `inet ezgh_cni`, holds the pod identity agent's link-local address |
-| `policy` | NetworkPolicy agent: watches Pods, Namespaces and NetworkPolicies and keeps table `inet ezgh_policy` |
+| CNI plugin | Invoked by containerd for each pod: creates the pod's interface, addresses and routes |
+| `install` | Init container that installs `ezgh-vpc-cni` and `portmap` into the node's CNI directory |
+| `ipamd` | Node daemon that manages delegated prefixes through the EZGH network API using the node's instance credentials, and writes the CNI configuration |
+| `policy` | Node daemon that watches Pods, Namespaces and NetworkPolicies and keeps the node's nftables rules current |
 
-It reads the node's join facts from `/etc/kubernetes/ezgh/join.json`. Logs are JSON lines through
-the vendored kit (`internal/kit/logging`).
+The node's cluster details are read from `/etc/kubernetes/ezgh/join.json`. Logs are structured JSON.
 
-## Build and test
+## Container image and binaries
 
-Go 1.27.1 (`go.mod`).
+| Artifact | Location |
+| --- | --- |
+| Container image (linux/amd64) | `q5zljyjh52il.registry.ezghcloud.com/kubernetes/vpc-cni:<version>` |
+| Binaries (linux/amd64, linux/arm64) with `SHA256SUMS` | [GitHub Releases](https://github.com/ezgamehost/ezgh-cni/releases) |
+
+## Building from source
+
+Requires Go 1.27.1 or later.
+
+```sh
+CGO_ENABLED=0 GOOS=linux go build ./cmd/ezgh-vpc-cni
+docker build .
+```
+
+## Testing
 
 | Check | Command |
 | --- | --- |
-| Build | `CGO_ENABLED=0 GOOS=linux go build ./cmd/ezgh-vpc-cni` |
-| Image | `docker build .` (Debian with nftables, plus upstream portmap at the containernetworking/plugins version `go.mod` pins) |
-| Tests | `go test -race $(go list ./... \| grep -v /internal/kit/)` |
-| Kernel tests | `scripts/netns-test.sh` (build tag `netns`: veths, routes, rules, dummy links and nftables in throwaway network namespaces, as root in a Debian container: Apple `container` on a Mac, Docker elsewhere) |
-| Lint | `gofmt -l .`; `go vet` (also `-tags netns ./internal/cni/...`) and `go run honnef.co/go/tools/cmd/staticcheck@v0.8.1` over `$(go list ./... \| grep -v /internal/kit/)` (service-template checks the kit) |
+| Unit tests | `go test -race $(go list ./... \| grep -v /internal/kit/)` |
+| Kernel tests | `scripts/netns-test.sh` (runs as root in a Linux container, using throwaway network namespaces) |
+| Lint | `gofmt -l .`, `go vet` and `staticcheck` |
 | Logging | `scripts/check-logging.sh` |
 
-CI (`.github/workflows/ci.yml`) runs them, the kernel tests as root on a GitHub-hosted runner with
-`EZGH_CNI_KERNEL_TESTS=required` (a skipped kernel test fails), and builds the image without pushing
-it, on every pull request and push to main.
+Continuous integration runs all of these, including the kernel tests, on every pull request and
+push to `main`.
 
 ## Releases
 
-Push a tag `vX.Y.Z` on main. `.github/workflows/release.yml` publishes the GitHub release
-(`ezgh-vpc-cni-linux-{amd64,arm64}`, `SHA256SUMS`) and pushes the linux/amd64 image to the
-kubernetes-addons Registry as `<host>/kubernetes/vpc-cni:<tag>`. The image goes first and the binaries only after it, from GitHub Environment `release`
-(limited to tags `v*`): secret `KUBERNETES_ADDONS_REGISTRY_KEY` (a platform-organization Bot key that can push to project
-kubernetes-addons) and variable `KUBERNETES_ADDONS_REGISTRY_HOST` (`<hostId>.registry.ezghcloud.com`).
-A published tag never moves: a fix ships as a new version. The add-on bundle runs the image's
-commands and flags as they are: changing one needs a new bundle version in kubernetes-stack too.
+Releases follow semantic versioning. Pushing a `vX.Y.Z` tag on `main` publishes the container image
+and then the binaries. Published versions are immutable; fixes ship as new versions.
 
-kubernetes-stack's `vpc-cni` add-on bundle pins the image in its `images.json` (`vpc-cni`).
+## Vendored code
 
-## Copied code
+`internal/kit` and `internal/nodeauth` are vendored from shared EZGH libraries and refreshed with
+`scripts/sync-kit.sh` and `scripts/sync-copies.sh`. Changes to them are made upstream.
 
-Other repositories' code is copied in, not imported, each copy with its own sync:
+## Security
 
-| Path | Source | Sync |
-| --- | --- | --- |
-| `internal/kit` | ezgamehost/service-template `kit/go` (commit in `internal/kit/KIT_VERSION`) | `scripts/sync-kit.sh` |
-| `internal/nodeauth/{join.go,imds}` (the node's join facts and the metadata service client) | ezgamehost/kubernetes-stack (commit in `COPIES`) | `scripts/sync-copies.sh kubernetes-stack` |
+Please report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ## License
 
-Apache-2.0 ([LICENSE](LICENSE)). Security reports: [SECURITY.md](SECURITY.md).
+Licensed under the [Apache License 2.0](LICENSE).
