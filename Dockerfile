@@ -13,7 +13,8 @@ RUN v=$(go list -m -f '{{.Version}}' github.com/containernetworking/plugins) \
  && CGO_ENABLED=0 GOBIN=/out go install -trimpath -ldflags="-s -w" github.com/containernetworking/plugins/plugins/meta/portmap@$v
 
 FROM mirror.gcr.io/library/debian:13-slim
-RUN apt-get update && apt-get install -y --no-install-recommends nftables \
+# ca-certificates: ipamd calls network-api over HTTPS (--no-install-recommends would leave the roots out).
+RUN apt-get update && apt-get install -y --no-install-recommends nftables ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/ezgh-vpc-cni /out/portmap /
 ENTRYPOINT ["/ezgh-vpc-cni"]

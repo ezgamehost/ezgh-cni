@@ -111,4 +111,9 @@ jobs:
           context: .
           platforms: linux/amd64
           push: false
+          load: true
           tags: kubernetes/vpc-cni:ci
+      # ipamd calls network-api over HTTPS: the image needs the public roots (Gate 2: debian-slim
+      # without ca-certificates refused network-api's certificate on every node).
+      - name: image trusts the public roots
+        run: docker run --rm --entrypoint test kubernetes/vpc-cni:ci -s /etc/ssl/certs/ca-certificates.crt
