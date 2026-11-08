@@ -308,6 +308,11 @@ func (l *lockedWriter) Write(b []byte) (int, error) {
 
 func (n *node) add(t *testing.T, id string) (AddResponse, error) {
 	t.Helper()
+	return n.addWithin(t, id, 10*time.Second)
+}
+
+func (n *node) addWithin(t *testing.T, id string, d time.Duration) (AddResponse, error) {
+	t.Helper()
 	eventually(t, "the socket", func() bool {
 		conn, err := net.Dial("unix", n.ipamd.Socket)
 		if err == nil {
@@ -315,7 +320,7 @@ func (n *node) add(t *testing.T, id string) (AddResponse, error) {
 		}
 		return err == nil
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
 	return n.ipamd.Add(ctx, AddRequest{ContainerID: id, IfName: "eth0", Netns: "/var/run/netns/x", Namespace: "default", Pod: id})
 }
@@ -711,6 +716,41 @@ func TestWaitingAddServedWhenCooled(t *testing.T) {
 		}
 	case <-time.After(fastTiming.AddWait / 2):
 		t.Fatal("the waiting ADD wasn't served once the address cooled")
+	}
+}
+
+func TestDelCancelsWaitingAdd(t *testing.T) {
+	c := newCloud()
+	c.hideNew = true
+	n := start(t, c)
+	// c2 queues during c1's 100 ms, so it is waiting across c1's DEL and must survive it.
+	got := make(chan error, 1)
+	go func() { _, err := n.add(t, "c2"); got <- err }()
+	if _, err := n.addWithin(t, "c1", 100*time.Millisecond); err == nil {
+		t.Fatal("c1 served with no prefix")
+	}
+	if err := n.ipamd.Del(context.Background(), "c1", "eth0"); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the IPv6 assign", func() bool { as, _ := c.counts(); return as == 1 })
+	c.show(v6Prefix)
+	eventually(t, "the IPv4 assign", func() bool { as, _ := c.counts(); return as == 2 })
+	c.show("10.240.1.16/28")
+	var err error
+	eventually(t, "c2 served", func() bool {
+		select {
+		case err = <-got:
+			return true
+		default:
+			return false
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(n.dir, "allocations.json"))
+	if err != nil || strings.Contains(string(b), `"c1/eth0"`) || !strings.Contains(string(b), `"c2/eth0"`) {
+		t.Fatal(string(b), err)
 	}
 }
 

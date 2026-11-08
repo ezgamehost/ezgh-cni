@@ -126,6 +126,16 @@ func (d *daemon) handle(r request) {
 		r.reply <- reply{ready: d.known && d.conflist}
 	case "del":
 		d.pool.Release(r.key, now)
+		// The runtime gave up on this container's ADD; never allocate for it later.
+		keep := d.waiters[:0]
+		for _, w := range d.waiters {
+			if w.key == r.key {
+				w.reply <- reply{err: errors.New("deleted")}
+			} else {
+				keep = append(keep, w)
+			}
+		}
+		d.waiters = keep
 		r.reply <- reply{err: d.save()}
 	case "add":
 		if !d.give(r.key, r.reply, now) {
