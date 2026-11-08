@@ -686,6 +686,20 @@ func TestConflistOnlyWhenReady(t *testing.T) {
 	}
 }
 
+func TestConflistWriteRetried(t *testing.T) {
+	c := newCloud("10.240.1.16/28", v6Prefix)
+	var dir string
+	n := start(t, c, func(o *Options) { dir = filepath.Join(o.Dir, "missing"); o.Conflist = filepath.Join(dir, "conflist") })
+	time.Sleep(100 * time.Millisecond) // several failed writes
+	if n.ready() {
+		t.Fatal("ready without a conflist")
+	}
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "ready", n.ready)
+}
+
 func TestRealizeComparesPrefixes(t *testing.T) {
 	c := newCloud("10.240.1.16/28")
 	c.expand = true

@@ -375,6 +375,7 @@ func (d *daemon) apply(ctx context.Context, in imds.Instance) {
 	if !d.conflist && v6 != nil && len(v4) > 0 {
 		if err := writeFile(d.o.Conflist, []byte(conflist), 0o644); err != nil {
 			d.o.Log.Error("conflist", "error", err)
+			d.unknown(now) // the re-read re-runs apply
 		} else {
 			d.conflist = true
 			d.o.Log.Info("ready", "conflist", d.o.Conflist)
