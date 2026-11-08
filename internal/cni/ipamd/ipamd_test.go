@@ -700,7 +700,11 @@ func TestConflistWriteRetried(t *testing.T) {
 	c := newCloud("10.240.1.16/28", v6Prefix)
 	var dir string
 	n := start(t, c, func(o *Options) { dir = filepath.Join(o.Dir, "missing"); o.Conflist = filepath.Join(dir, "conflist") })
+	began := time.Now()
 	time.Sleep(100 * time.Millisecond) // several failed writes
+	if got, max := strings.Count(n.logs.String(), "msg=conflist"), 5+int(time.Since(began)/(50*time.Millisecond)); got > max {
+		t.Fatalf("%d conflist retries, want at most %d: the wait must back off", got, max)
+	}
 	if n.ready() {
 		t.Fatal("ready without a conflist")
 	}

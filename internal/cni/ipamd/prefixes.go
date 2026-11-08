@@ -40,7 +40,7 @@ func (d *daemon) start(ctx context.Context, now time.Time) {
 	}
 	act := d.pool.Want(now)
 	// Before asking for another /28, or while ADDs wait (at the cap no assign helps), take back gone pods' addresses.
-	if (act.Assign4 || len(d.waiters) > 0) && d.reap(now) {
+	if (act.Assign4 || len(d.waiters) > 0) && d.reap(time.Now()) { // Release is stamped with the real time, not the loop's
 		act = d.pool.Want(now)
 	}
 	d.nextCheck = act.NextCheck

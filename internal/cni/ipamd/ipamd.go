@@ -372,7 +372,7 @@ func (d *daemon) apply(ctx context.Context, in imds.Instance) {
 		return
 	}
 	d.pool.SetHeld(v4, v6, now)
-	d.held6, d.known, d.unknownWait = v6, true, 0
+	d.held6, d.known = v6, true
 	if !d.conflist && v6 != nil && len(v4) > 0 {
 		if err := writeFile(d.o.Conflist, []byte(conflist), 0o644); err != nil {
 			d.o.Log.Error("conflist", "error", err)
@@ -381,6 +381,9 @@ func (d *daemon) apply(ctx context.Context, in imds.Instance) {
 			d.conflist = true
 			d.o.Log.Info("ready", "conflist", d.o.Conflist)
 		}
+	}
+	if d.known { // a failing conflist write keeps its backoff growing
+		d.unknownWait = 0
 	}
 	d.serveWaiters(now)
 }
