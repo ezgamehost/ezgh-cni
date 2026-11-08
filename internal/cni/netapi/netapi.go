@@ -144,7 +144,7 @@ func (c *Client) call(ctx context.Context, method, url, idempotencyKey string, b
 	if doc.ID == "" {
 		return answer{}, fmt.Errorf("network-api answered %d without an operation", resp.StatusCode)
 	}
-	if doc.Status == "failed" {
+	if doc.Status == "failed" || doc.Status == "cancelled" {
 		a.err = &APIError{}
 		if doc.Error != nil {
 			a.err.Code, a.err.Message = doc.Error.Code, doc.Error.Message

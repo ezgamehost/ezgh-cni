@@ -111,6 +111,15 @@ func TestFailedOperationIsAPIError(t *testing.T) {
 	}
 }
 
+func TestCancelledOperationIsAPIError(t *testing.T) {
+	c, _, _ := fake(t, 200, nil, `{"id":"op1","status":"cancelled"}`)
+	got, err := c.Operation(context.Background(), "op1")
+	var e *APIError
+	if !errors.As(err, &e) || got.Status != "cancelled" {
+		t.Fatal(got, err)
+	}
+}
+
 func Test429RetryAfter(t *testing.T) {
 	c, _, _ := fake(t, 429, map[string]string{"Retry-After": "17"}, `{"error":{"code":"rate_limited","message":"slow down"}}`)
 	_, err := c.Assign(context.Background(), "eni_x", "ipv4", "k")
