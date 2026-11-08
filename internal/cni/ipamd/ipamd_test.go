@@ -738,13 +738,15 @@ func TestWaitingAddServedWhenCooled(t *testing.T) {
 	got := make(chan AddResponse, 1)
 	go func() { a, _ := n.add(t, "late"); got <- a }()
 	time.Sleep(20 * time.Millisecond)
+	// Timed from before the DEL: the release happens inside it, so this bounds the cooldown exactly
+	// (timing from its return loses the DEL's fsync and reply).
+	begin := time.Now()
 	if err := n.ipamd.Del(context.Background(), "c0", "eth0"); err != nil {
 		t.Fatal(err)
 	}
-	begin := time.Now()
 	select {
 	case a := <-got:
-		if a.IPv4 != first.IPv4 || time.Since(begin) < fastPool.Cooldown-20*time.Millisecond {
+		if a.IPv4 != first.IPv4 || time.Since(begin) < fastPool.Cooldown {
 			t.Fatalf("%v after %v", a, time.Since(begin))
 		}
 	case <-time.After(fastTiming.AddWait / 2):
