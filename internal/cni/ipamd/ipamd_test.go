@@ -240,6 +240,7 @@ type fakeNL struct {
 	pia   int
 	rules []netip.Prefix
 	table int
+	veths map[netip.Addr]string // nil: the route walk fails, so nothing is released
 }
 
 func (f *fakeNL) LinkByMAC(mac string) (string, error) {
@@ -254,6 +255,14 @@ func (f *fakeNL) SetPrefixRules(p []netip.Prefix, table int) error {
 	defer f.mu.Unlock()
 	f.rules, f.table = p, table
 	return nil
+}
+func (f *fakeNL) HostVeths() (map[netip.Addr]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.veths == nil {
+		return nil, fmt.Errorf("no route walk")
+	}
+	return f.veths, nil
 }
 func (f *fakeNL) get() []netip.Prefix { f.mu.Lock(); defer f.mu.Unlock(); return f.rules }
 
@@ -818,5 +827,42 @@ func TestOperationInProgressIsTransient(t *testing.T) {
 	defer c.mu.Unlock()
 	if len(c.assigns) != 2 || c.assigns[0] != c.assigns[1] || len(n.events.Events) != 0 {
 		t.Fatalf("assigns %v, %d events", c.assigns, len(n.events.Events))
+	}
+}
+
+func TestReleasesAllocationWithoutVeth(t *testing.T) {
+	c := newCloud("10.240.1.16/28", v6Prefix)
+	old, now := time.Now().Add(-10*time.Minute).UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)
+	state := fmt.Sprintf(`{"allocations": {
+		"dead/eth0": {"ipv4": "10.240.1.17", "ipv6": "fd12:3456:789a:2800:c4a4::1", "at": %q},
+		"live/eth0": {"ipv4": "10.240.1.18", "ipv6": "fd12:3456:789a:2800:c4a4::2", "at": %q},
+		"young/eth0": {"ipv4": "10.240.1.19", "ipv6": "fd12:3456:789a:2800:c4a4::3", "at": %q},
+		"undated/eth0": {"ipv4": "10.240.1.20", "ipv6": "fd12:3456:789a:2800:c4a4::4"}
+	}, "cooling": {}}`, old, old, now)
+	veths := map[netip.Addr]string{netip.MustParseAddr("10.240.1.18"): "ezp0123456789ab"}
+	run := func(nl *fakeNL) string {
+		dir, _ := os.MkdirTemp("", "ipamd")
+		t.Cleanup(func() { os.RemoveAll(dir) })
+		if err := os.WriteFile(filepath.Join(dir, "allocations.json"), []byte(state), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		n := start(t, c, func(o *Options) { o.Dir, o.Exec = dir, nl })
+		eventually(t, "ready", n.ready)
+		n.cancel()
+		<-n.done
+		n.done <- nil
+		b, _ := os.ReadFile(filepath.Join(dir, "allocations.json"))
+		return string(b)
+	}
+	// A failed route walk is no evidence: everything is kept.
+	if got := run(&fakeNL{}); !strings.Contains(got, `"dead/eth0"`) || !strings.Contains(got, `"undated/eth0"`) {
+		t.Fatalf("released without a route walk: %s", got)
+	}
+	got := run(&fakeNL{veths: veths})
+	if strings.Contains(got, `"dead/eth0"`) || strings.Contains(got, `"undated/eth0"`) {
+		t.Fatalf("an allocation with no veth kept: %s", got)
+	}
+	if !strings.Contains(got, `"live/eth0"`) || !strings.Contains(got, `"young/eth0"`) {
+		t.Fatalf("a live or young allocation released: %s", got)
 	}
 }

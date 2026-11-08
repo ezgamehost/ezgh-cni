@@ -60,8 +60,11 @@ func TestSameKeySameAlloc(t *testing.T) {
 	p := pool(1)
 	a, _ := p.Allocate("c/eth0", t0)
 	b, _ := p.Allocate("c/eth0", t0)
-	if a != b || a.V6 == (Alloc{}).V6 {
+	if a != b || a.V6 == (Alloc{}).V6 || !a.At.Equal(t0) {
 		t.Fatal(a, b)
+	}
+	if c, _ := p.Allocate("c/eth0", t0.Add(time.Hour)); c.V4 != a.V4 || !c.At.Equal(t0.Add(time.Hour)) {
+		t.Fatal("a repeated ADD keeps its first date", c)
 	}
 }
 

@@ -42,3 +42,24 @@ func TestKernelPrefixRules(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestHostVethsSeesPodRoute(t *testing.T) {
+	n := cnitest.NS(t)
+	// A pod's veth and /32 as the plugin leaves them, beside a non-pod link and a non-host route.
+	cnitest.Sh(t, n, `ip link add ezp0123456789ab type veth peer name pod0
+ip link add other0 type veth peer name other1
+ip link set ezp0123456789ab up; ip link set pod0 up; ip link set other0 up; ip link set other1 up
+ip route add 10.240.1.17/32 dev ezp0123456789ab
+ip route add 10.240.1.18/32 dev other0
+ip route add 10.240.2.0/24 dev ezp0123456789ab`)
+	var got map[netip.Addr]string
+	cnitest.Do(t, n, func() (err error) { got, err = Kernel{}.HostVeths(); return err })
+	if len(got) != 1 || got[netip.MustParseAddr("10.240.1.17")] != "ezp0123456789ab" {
+		t.Fatal(got)
+	}
+	cnitest.Sh(t, n, "ip link del ezp0123456789ab") // the pod is gone: so is its route
+	cnitest.Do(t, n, func() (err error) { got, err = Kernel{}.HostVeths(); return err })
+	if len(got) != 0 {
+		t.Fatal(got)
+	}
+}

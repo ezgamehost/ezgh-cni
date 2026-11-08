@@ -24,6 +24,7 @@ type Prefix struct {
 type Alloc struct {
 	V4 netip.Addr `json:"ipv4"`
 	V6 netip.Addr `json:"ipv6"`
+	At time.Time  `json:"at,omitempty"` // when Allocate made it; zero in state from an older ipamd
 }
 
 // Action is what the pool wants done; NextCheck is when to ask again (zero: only after a change).
@@ -80,9 +81,11 @@ func (p *Pool) SetHeld(v4 []Prefix, v6 *Prefix, now time.Time) {
 }
 
 // Allocate gives key (containerId/ifName) an IPv4 and an IPv6 address; the same key gets the same
-// ones back.
+// ones back, dated now: a repeated ADD is wiring them again.
 func (p *Pool) Allocate(key string, now time.Time) (Alloc, error) {
 	if a, ok := p.allocs[key]; ok {
+		a.At = now
+		p.allocs[key] = a
 		return a, nil
 	}
 	if p.v6 == nil {
@@ -126,7 +129,7 @@ func (p *Pool) Allocate(key string, now time.Time) (Alloc, error) {
 			break
 		}
 	}
-	a := Alloc{V4: v4, V6: v6}
+	a := Alloc{V4: v4, V6: v6, At: now}
 	p.allocs[key] = a
 	delete(p.empty, prefixOf(p.v4, v4))
 	p.observe(now)

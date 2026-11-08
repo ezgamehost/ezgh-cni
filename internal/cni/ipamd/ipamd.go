@@ -48,7 +48,13 @@ type Netlink interface {
 	EnsurePIA() error
 	// SetPrefixRules makes the pref 1536 rules exactly `from <prefix> lookup <table> suppress_prefixlength 0`.
 	SetPrefixRules(prefixes []netip.Prefix, table int) error
+	// HostVeths maps each pod address to its host veth, from the plugin's `<addr> dev ezp…` routes.
+	HostVeths() (map[netip.Addr]string, error)
 }
+
+// staleAfter is how old an allocation must be before a missing veth means its pod is gone: longer
+// than an ADD can wait for its address plus a network operation, so a pod still being wired is kept.
+func (t Timing) staleAfter() time.Duration { return t.AddWait + t.Realize }
 
 // Timing is ipamd's waits; tests shorten them.
 type Timing struct {
@@ -180,6 +186,7 @@ func Run(ctx context.Context, o Options) error {
 		return err
 	}
 	d.pool.Restore(kept.State)
+	d.reap(time.Now())
 	if u := kept.Unassign; u != nil {
 		d.pool.Reserve(u.CIDR)
 		d.unassigning, d.keys[unassign] = &u.Prefix, u.Key
@@ -374,6 +381,32 @@ func (d *daemon) apply(ctx context.Context, in imds.Instance) {
 		}
 	}
 	d.serveWaiters(now)
+}
+
+// reap releases the allocations whose pod is gone: no ezp* route on this node for its IPv4 and
+// older than staleAfter. Nothing tells ipamd when a pod's wiring failed or a DEL never came; the
+// missing route does. A failed route walk releases nothing. It reports whether it released any.
+func (d *daemon) reap(now time.Time) bool {
+	veths, err := d.o.Exec.HostVeths()
+	if err != nil {
+		d.o.Log.Warn("pod routes", "error", err)
+		return false
+	}
+	released := false
+	for key, a := range d.pool.State().Allocs {
+		if _, ok := veths[a.V4]; ok || now.Sub(a.At) < d.o.Timing.staleAfter() {
+			continue
+		}
+		d.pool.Release(key, now) // deleting during range is safe
+		d.o.Log.Info("released the address of a gone pod", "allocation", key, "ipv4", a.V4.String())
+		released = true
+	}
+	if released {
+		if err := d.save(); err != nil {
+			d.o.Log.Error("allocations", "error", err)
+		}
+	}
+	return released
 }
 
 // unknown leaves the pool as it is and asks metadata again after 1 s, doubling to 10 s.
