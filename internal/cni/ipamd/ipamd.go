@@ -262,6 +262,7 @@ type daemon struct {
 	notBefore   map[string]time.Time
 	cause       map[string]*failure // per family: why the last assign was refused
 	episode     map[string]string   // per family: the event reason already recorded
+	walkFailing bool                // the last route walk failed: logged once, not per pass
 	nextCheck   time.Time
 }
 
@@ -390,9 +391,13 @@ func (d *daemon) apply(ctx context.Context, in imds.Instance) {
 func (d *daemon) reap(now time.Time) bool {
 	veths, err := d.o.Exec.HostVeths()
 	if err != nil {
-		d.o.Log.Warn("pod routes", "error", err)
+		if !d.walkFailing {
+			d.o.Log.Warn("pod routes", "error", err)
+		}
+		d.walkFailing = true
 		return false
 	}
+	d.walkFailing = false
 	released := false
 	for key, a := range d.pool.State().Allocs {
 		if _, ok := veths[a.V4]; ok || now.Sub(a.At) < d.o.Timing.staleAfter() {

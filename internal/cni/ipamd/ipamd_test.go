@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -272,7 +271,7 @@ type node struct {
 	events  *record.FakeRecorder
 	dir     string
 	ipamd   Client
-	logs    *bytes.Buffer
+	logs    *lockedWriter
 	nftText func() string
 	done    chan error
 	cancel  context.CancelFunc
@@ -284,13 +283,13 @@ func start(t *testing.T, c *cloud, mods ...func(*Options)) *node {
 	t.Cleanup(ts.Close)
 	dir, _ := os.MkdirTemp("", "ipamd")
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	n := &node{cloud: c, nl: &fakeNL{}, events: record.NewFakeRecorder(100), logs: &bytes.Buffer{}, done: make(chan error, 1)}
+	n := &node{cloud: c, nl: &fakeNL{}, events: record.NewFakeRecorder(100), logs: &lockedWriter{}, done: make(chan error, 1)}
 	var mu sync.Mutex
 	var nftText string
 	n.nftText = func() string { mu.Lock(); defer mu.Unlock(); return nftText }
 	o := Options{IMDS: &imds.Client{Base4: ts.URL, Base6: ts.URL}, Events: n.events, Exec: n.nl,
 		NFT:   func(_ context.Context, s string) error { mu.Lock(); nftText = s; mu.Unlock(); return nil },
-		Log:   slog.New(slog.NewTextHandler(&lockedWriter{w: n.logs}, nil)),
+		Log:   slog.New(slog.NewTextHandler(n.logs, nil)),
 		Facts: &nodeauth.JoinFacts{Cluster: "kcl_test"}, NetBase: ts.URL, Dir: dir, Conflist: filepath.Join(dir, "conflist"),
 		Addresses: fastPool, Timing: fastTiming, Jitter: func(d time.Duration) time.Duration { return d }}
 	for _, m := range mods {
@@ -304,15 +303,22 @@ func start(t *testing.T, c *cloud, mods ...func(*Options)) *node {
 	return n
 }
 
+// lockedWriter is the daemon's log: it writes while a test reads.
 type lockedWriter struct {
-	mu sync.Mutex
-	w  io.Writer
+	mu  sync.Mutex
+	buf bytes.Buffer
 }
 
 func (l *lockedWriter) Write(b []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.w.Write(b)
+	return l.buf.Write(b)
+}
+
+func (l *lockedWriter) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
 }
 
 func (n *node) add(t *testing.T, id string) (AddResponse, error) {
@@ -559,6 +565,10 @@ func TestOneKeyPerCallNeverOnDisk(t *testing.T) {
 	})
 	if strings.Contains(n.logs.String(), "ezgh_") {
 		t.Fatal(n.logs.String())
+	}
+	// fakeNL's walk always fails here: logged once, not on every pass.
+	if k := strings.Count(n.logs.String(), "pod routes"); k != 1 {
+		t.Fatalf("%d route walk failures logged", k)
 	}
 }
 
