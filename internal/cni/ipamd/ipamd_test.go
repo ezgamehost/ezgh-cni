@@ -832,15 +832,16 @@ func TestOperationInProgressIsTransient(t *testing.T) {
 
 func TestReleasesAllocationWithoutVeth(t *testing.T) {
 	c := newCloud("10.240.1.16/28", v6Prefix)
-	old, now := time.Now().Add(-10*time.Minute).UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)
-	state := fmt.Sprintf(`{"allocations": {
+	veths := map[netip.Addr]string{netip.MustParseAddr("10.240.1.18"): "ezp0123456789ab"}
+	run := func(nl *fakeNL) string {
+		// Dated per run: "young" must stay younger than staleAfter on a slow runner.
+		old, now := time.Now().Add(-10*time.Minute).UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)
+		state := fmt.Sprintf(`{"allocations": {
 		"dead/eth0": {"ipv4": "10.240.1.17", "ipv6": "fd12:3456:789a:2800:c4a4::1", "at": %q},
 		"live/eth0": {"ipv4": "10.240.1.18", "ipv6": "fd12:3456:789a:2800:c4a4::2", "at": %q},
 		"young/eth0": {"ipv4": "10.240.1.19", "ipv6": "fd12:3456:789a:2800:c4a4::3", "at": %q},
 		"undated/eth0": {"ipv4": "10.240.1.20", "ipv6": "fd12:3456:789a:2800:c4a4::4"}
 	}, "cooling": {}}`, old, old, now)
-	veths := map[netip.Addr]string{netip.MustParseAddr("10.240.1.18"): "ezp0123456789ab"}
-	run := func(nl *fakeNL) string {
 		dir, _ := os.MkdirTemp("", "ipamd")
 		t.Cleanup(func() { os.RemoveAll(dir) })
 		if err := os.WriteFile(filepath.Join(dir, "allocations.json"), []byte(state), 0o600); err != nil {
@@ -864,5 +865,23 @@ func TestReleasesAllocationWithoutVeth(t *testing.T) {
 	}
 	if !strings.Contains(got, `"live/eth0"`) || !strings.Contains(got, `"young/eth0"`) {
 		t.Fatalf("a live or young allocation released: %s", got)
+	}
+}
+
+func TestReapKeepsPendingUnassign(t *testing.T) {
+	c := newCloud("10.240.1.16/28", "10.240.1.32/28", v6Prefix)
+	c.queued, c.retry = 1<<20, "0" // the re-driven unassign never ends, so nothing else saves
+	dir, _ := os.MkdirTemp("", "ipamd")
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	state := `{"allocations": {"dead/eth0": {"ipv4": "10.240.1.17", "ipv6": "fd12:3456:789a:2800:c4a4::1"}}, "cooling": {},
+		"unassign": {"prefix": "10.240.1.32/28", "generation": "1", "idempotencyKey": "kept-key"}}`
+	if err := os.WriteFile(filepath.Join(dir, "allocations.json"), []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	start(t, c, func(o *Options) { o.Dir, o.Exec = dir, &fakeNL{veths: map[netip.Addr]string{}} })
+	eventually(t, "the unassign re-driven", func() bool { _, us := c.counts(); return us >= 1 })
+	b, _ := os.ReadFile(filepath.Join(dir, "allocations.json"))
+	if strings.Contains(string(b), `"dead/eth0"`) || !strings.Contains(string(b), "kept-key") || !strings.Contains(string(b), "10.240.1.32/28") {
+		t.Fatalf("the reap's save lost the unassign: %s", b)
 	}
 }

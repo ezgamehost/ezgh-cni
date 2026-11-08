@@ -186,11 +186,11 @@ func Run(ctx context.Context, o Options) error {
 		return err
 	}
 	d.pool.Restore(kept.State)
-	d.reap(time.Now())
 	if u := kept.Unassign; u != nil {
 		d.pool.Reserve(u.CIDR)
 		d.unassigning, d.keys[unassign] = &u.Prefix, u.Key
 	}
+	d.reap(time.Now()) // after the unassign is back: its save keeps it
 	// A conflist from an older ipamd is replaced once the pod network is up.
 	b, err := os.ReadFile(o.Conflist)
 	d.conflist = err == nil && string(b) == conflist
